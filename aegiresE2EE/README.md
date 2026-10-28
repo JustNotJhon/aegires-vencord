@@ -6,14 +6,14 @@ This is a local Vencord plugin port for the Aegires **text-message wire format**
 
 - Encrypts outgoing messages and edits while the composer toggle is on.
 - Adds a lock toggle beside the message composer buttons. It stays enabled until clicked again and resets off when Vencord restarts.
-- Shows a lock and status label below each text message to distinguish Aegires-marked messages from unencrypted messages.
+- Shows only a lock icon beside the sender name to distinguish Aegires-encrypted messages from unencrypted messages. Hover it for the status text.
 - Leaves already-prefixed messages alone.
 - Cancels the send if the passphrase is missing, encryption fails, or ciphertext would exceed Discord's message limit. It does not fall back to sending plaintext.
 - Decrypts new and updated messages locally and scans the currently open channel when the plugin starts or the passphrase changes.
 - Adds message context-menu actions to decrypt a message manually or restore its ciphertext locally.
 - Attachment/stream encryption from Aegires is not included.
 
-Copy this directory to `src/userplugins/aegiresE2EE` in a Vencord checkout, then build Vencord using its current developer instructions. The code uses Vencord's ChatBarButton, MessageEvents, MessageUpdater, context menu, message accessory and Flux APIs. Plugin APIs can change, so build it against the exact Vencord revision being used before relying on it.
+Copy this directory to `src/userplugins/aegiresE2EE` in a Vencord checkout, then build Vencord using its current developer instructions. The code uses Vencord's ChatBarButton, MessageEvents, MessageUpdater, context menu, message decoration and Flux APIs. Plugin APIs can change, so build it against the exact Vencord revision being used before relying on it.
 
 Credits shown in the plugin settings: **Jhon444 (@ojhon444)**. The compatible wire format is based on the Aegires project's published behavior: [Curione23/Aegires](https://github.com/Curione23/Aegires).
 

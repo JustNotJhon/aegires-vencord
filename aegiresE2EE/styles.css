@@ -1,11 +1,10 @@
-.aegires-e2ee-status {
+.aegires-e2ee-indicator {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    vertical-align: top;
     color: var(--text-muted);
-    font-size: 12px;
 }
 
-.aegires-e2ee-status--encrypted {
+.aegires-e2ee-indicator--encrypted {
     color: var(--status-positive);
 }

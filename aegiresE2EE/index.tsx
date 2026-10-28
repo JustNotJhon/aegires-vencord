@@ -6,11 +6,16 @@ import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/Co
 import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
 import { Message } from "@vencord/discord-types";
-import { Menu, MessageStore, SelectedChannelStore, showToast, useEffect, useState } from "@webpack/common";
+import { Menu, MessageStore, SelectedChannelStore, showToast } from "@webpack/common";
 
 import { decryptText, encryptText, looksEncrypted } from "./crypto";
 
 const settings = definePluginSettings({
+    encryptOutgoing: {
+        type: OptionType.BOOLEAN,
+        default: false,
+        description: "Encrypt outgoing messages while the composer button is enabled"
+    },
     decryptIncoming: {
         type: OptionType.BOOLEAN,
         default: true,
@@ -34,13 +39,6 @@ const settings = definePluginSettings({
 const ciphertextByMessageId = new Map<string, string>();
 const recentlyTried = new Map<string, string>();
 const MAX_REMEMBERED_MESSAGES = 500;
-let outgoingEncryptionEnabled = false;
-const encryptionToggleSetters = new Set<(enabled: boolean) => void>();
-
-function setOutgoingEncryptionEnabled(enabled: boolean) {
-    outgoingEncryptionEnabled = enabled;
-    for (const setter of encryptionToggleSetters) setter(enabled);
-}
 
 function LockIcon({ open = false, width = 20, height = 20, className }: { open?: boolean; width?: number | string; height?: number | string; className?: string; }) {
     return (
@@ -53,19 +51,14 @@ function LockIcon({ open = false, width = 20, height = 20, className }: { open?:
 }
 
 const EncryptionToggle: ChatBarButtonFactory = ({ isMainChat }) => {
-    const [enabled, setEnabled] = useState(outgoingEncryptionEnabled);
-
-    useEffect(() => {
-        encryptionToggleSetters.add(setEnabled);
-        return () => void encryptionToggleSetters.delete(setEnabled);
-    }, []);
+    const { encryptOutgoing: enabled } = settings.use(["encryptOutgoing"]);
 
     if (!isMainChat) return null;
 
     return (
         <ChatBarButton
             tooltip={enabled ? "Disable Aegires message encryption" : "Enable Aegires message encryption"}
-            onClick={() => setOutgoingEncryptionEnabled(!enabled)}
+            onClick={() => settings.store.encryptOutgoing = !enabled}
             buttonProps={{ "aria-pressed": enabled, style: { color: enabled ? "var(--status-positive)" : undefined } }}
         >
             <LockIcon open={!enabled} />
@@ -73,14 +66,13 @@ const EncryptionToggle: ChatBarButtonFactory = ({ isMainChat }) => {
     );
 };
 
-function MessageEncryptionStatus({ message }: { message: Message; }) {
+function MessageEncryptionIndicator({ message }: { message: Message; }) {
     if (!message.content) return null;
     const encrypted = looksEncrypted(message.content) || ciphertextByMessageId.has(message.id);
 
     return (
-        <span className={`aegires-e2ee-status${encrypted ? " aegires-e2ee-status--encrypted" : ""}`} title={encrypted ? "Aegires-encrypted message" : "Message is not encrypted with Aegires"}>
+        <span className={`aegires-e2ee-indicator${encrypted ? " aegires-e2ee-indicator--encrypted" : ""}`} title={encrypted ? "Aegires-encrypted message" : "Message is not encrypted with Aegires"} aria-label={encrypted ? "Aegires-encrypted message" : "Message is not encrypted with Aegires"}>
             <LockIcon open={!encrypted} width={14} height={14} />
-            <span>{encrypted ? "Aegires E2EE" : "Not encrypted"}</span>
         </span>
     );
 }
@@ -92,7 +84,7 @@ function remember(map: Map<string, string>, id: string, value: string) {
 }
 
 async function encryptMessage(message: { content: string; }, force = false) {
-    if ((!outgoingEncryptionEnabled && !force) || !message.content || looksEncrypted(message.content)) return;
+    if ((!settings.store.encryptOutgoing && !force) || !message.content || looksEncrypted(message.content)) return;
     const passphrase = settings.store.passphrase;
     if (!passphrase) {
         showToast({ text: "Aegires E2EE is enabled, but no passphrase is set. Message was not sent.", variant: "critical" });
@@ -188,21 +180,21 @@ export default definePlugin({
         render: EncryptionToggle
     },
 
-    renderMessageAccessory: ({ message }) => <MessageEncryptionStatus message={message} />,
+    renderMessageDecoration: ({ message }) => <MessageEncryptionIndicator message={message} />,
 
     contextMenus: {
         message: messageContextMenu
     },
 
     start() {
-        setOutgoingEncryptionEnabled(false);
+        settings.store.encryptOutgoing = false;
         recentlyTried.clear();
         ciphertextByMessageId.clear();
         decryptCurrentChannel();
     },
 
     stop() {
-        setOutgoingEncryptionEnabled(false);
+        settings.store.encryptOutgoing = false;
         recentlyTried.clear();
         ciphertextByMessageId.clear();
     },
