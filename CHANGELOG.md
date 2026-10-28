@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Encrypt image attachments with the Aegires binary-file format and display decrypted images locally.
 - Show only an encryption lock icon beside each message's sender name.
 
 ## 0.1.0

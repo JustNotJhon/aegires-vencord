@@ -109,3 +109,35 @@ export async function decryptText(wire: string, password: string): Promise<strin
         return null;
     }
 }
+
+/** Aegires binary-file format: 12-byte random IV || AES-GCM ciphertext+tag. */
+export async function encryptBytes(plaintext: Uint8Array, password: string): Promise<Uint8Array> {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+    const key = await deriveKey(password);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, tagLength: TAG_BITS },
+        key,
+        plaintext
+    ));
+    const combined = new Uint8Array(iv.byteLength + ciphertext.byteLength);
+    combined.set(iv);
+    combined.set(ciphertext, iv.byteLength);
+    return combined;
+}
+
+export async function decryptBytes(combined: Uint8Array, password: string): Promise<Uint8Array | null> {
+    if (combined.byteLength < IV_BYTES + TAG_BITS / 8) return null;
+
+    try {
+        const iv = combined.slice(0, IV_BYTES);
+        const ciphertext = combined.slice(IV_BYTES);
+        const key = await deriveKey(password);
+        return new Uint8Array(await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv, tagLength: TAG_BITS },
+            key,
+            ciphertext
+        ));
+    } catch {
+        return null;
+    }
+}

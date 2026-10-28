@@ -7,8 +7,10 @@ A Vencord user plugin for encrypting Discord text messages with a format compati
 - AES-256-GCM message encryption compatible with Aegires text messages.
 - Composer lock toggle for turning encryption on and off before sending.
 - Small lock icon beside the sender name showing whether the message is encrypted.
+- Encrypts image attachments in the Aegires-compatible binary format and decrypts them locally for display.
 - Automatic local decryption of incoming messages, plus context-menu actions to decrypt or restore ciphertext.
 - Encrypted edits remain encrypted even if the composer toggle is off.
+- While encryption is enabled, non-image attachments and images over 50 MiB are blocked instead of being uploaded in plaintext.
 
 ## Install
 
