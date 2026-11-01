@@ -6,9 +6,9 @@ import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/Co
 import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
 import { CloudUpload, Message, MessageAttachment } from "@vencord/discord-types";
-import { Menu, MessageStore, SelectedChannelStore, showToast, useEffect, useState } from "@webpack/common";
+import { Menu, MessageStore, SelectedChannelStore, showToast, UserStore, useEffect, useState } from "@webpack/common";
 
-import { decryptBytes, decryptText, encryptBytes, encryptText, looksEncrypted } from "./crypto";
+import { AegiresPreset, decryptAegiresFile, decryptAegiresText, decryptBytes, decryptText, encryptAegiresFile, encryptAegiresText, looksEncrypted } from "./crypto";
 
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 const ENCRYPTED_FILENAME_MARKER = /\.enc(?=\.|$)/i;
@@ -61,6 +61,15 @@ const settings = definePluginSettings({
             recentlyTried.clear();
             decryptCurrentChannel();
         }
+    },
+    preset: {
+        type: OptionType.SELECT,
+        options: [
+            { label: "AES-128 · Compact", value: "AES128" },
+            { label: "AES-192 · Balanced", value: "AES192" },
+            { label: "AES-256 · Maximum", value: "AES256", default: true }
+        ],
+        description: "Aegires encryption preset for new messages and image uploads"
     }
 });
 
@@ -79,7 +88,7 @@ function LockIcon({ open = false, width = 20, height = 20, className }: { open?:
     );
 }
 
-function EncryptedImagePreview({ attachment }: { attachment: MessageAttachment; }) {
+function EncryptedImagePreview({ attachment, message }: { attachment: MessageAttachment; message: Message; }) {
     const { passphrase, decryptIncoming } = settings.use(["passphrase", "decryptIncoming"]);
     const [imageUrl, setImageUrl] = useState<string | null>(null);
     const [status, setStatus] = useState<"loading" | "locked" | "failed" | "ready">("loading");
@@ -99,8 +108,13 @@ function EncryptedImagePreview({ attachment }: { attachment: MessageAttachment; 
             const response = await fetch(attachment.url);
             if (!response.ok) throw new Error(`Attachment request failed (${response.status})`);
             const encrypted = new Uint8Array(await response.arrayBuffer());
-            if (encrypted.byteLength > MAX_IMAGE_BYTES + 28) throw new Error("Encrypted image is too large");
-            const plaintext = await decryptBytes(encrypted, passphrase);
+            const maxWireBytes = MAX_IMAGE_BYTES + 17 + Math.ceil(MAX_IMAGE_BYTES / (64 * 1024)) * 16;
+            if (encrypted.byteLength > maxWireBytes) throw new Error("Encrypted image is too large");
+            const senderId = message.author?.id;
+            if (!senderId) throw new Error("Image sender is unavailable");
+            const plaintext = (encrypted[0] >>> 4) === 3
+                ? await decryptAegiresFile(encrypted, passphrase, message.channel_id, senderId)
+                : await decryptBytes(encrypted, passphrase);
             if (!plaintext) throw new Error("Image decryption failed");
 
             objectUrl = URL.createObjectURL(new Blob([plaintext], { type: imageMimeType(attachment.filename) }));
@@ -135,7 +149,7 @@ function EncryptedImageAttachments({ message }: { message: Message; }) {
 
     return (
         <div className="aegires-e2ee-encrypted-images">
-            {attachments.map(attachment => <EncryptedImagePreview key={attachment.id} attachment={attachment} />)}
+            {attachments.map(attachment => <EncryptedImagePreview key={attachment.id} attachment={attachment} message={message} />)}
         </div>
     );
 }
@@ -174,16 +188,21 @@ function remember(map: Map<string, string>, id: string, value: string) {
     if (map.size > MAX_REMEMBERED_MESSAGES) map.delete(map.keys().next().value!);
 }
 
-async function encryptMessage(message: { content: string; }, force = false) {
+async function encryptMessage(channelId: string, message: { content: string; }, force = false) {
     if ((!settings.store.encryptOutgoing && !force) || !message.content || looksEncrypted(message.content)) return;
     const passphrase = settings.store.passphrase;
+    const senderId = UserStore.getCurrentUser()?.id;
+    if (!channelId || !senderId) {
+        showToast({ text: "Aegires E2EE could not identify this channel or account. Message was not sent.", variant: "critical" });
+        return { cancel: true };
+    }
     if (!passphrase) {
         showToast({ text: "Aegires E2EE is enabled, but no passphrase is set. Message was not sent.", variant: "critical" });
         return { cancel: true };
     }
 
     try {
-        const encrypted = await encryptText(message.content, passphrase);
+        const encrypted = await encryptAegiresText(message.content, passphrase, channelId, senderId, settings.store.preset as AegiresPreset);
         // Fail closed: never send plaintext on an enabled encryption failure.
         if (encrypted.length > 2000) {
             showToast({ text: "Encrypted message exceeds Discord's 2000-character limit. Message was not sent.", variant: "critical" });
@@ -205,7 +224,10 @@ async function decryptMessage(message: Message, force = false) {
     }
 
     const ciphertext = message.content;
-    const plaintext = await decryptText(ciphertext, passphrase);
+    const senderId = message.author?.id;
+    const plaintext = senderId
+        ? await decryptAegiresText(ciphertext, passphrase, message.channel_id, senderId) ?? await decryptText(ciphertext, passphrase)
+        : await decryptText(ciphertext, passphrase);
     if (plaintext === null) {
         remember(recentlyTried, message.id, ciphertext);
         return;
@@ -320,7 +342,9 @@ export default definePlugin({
         try {
             for (const upload of pending) {
                 const file = upload.item.file;
-                const encrypted = await encryptBytes(new Uint8Array(await file.arrayBuffer()), passphrase);
+                const senderId = UserStore.getCurrentUser()?.id;
+                if (!senderId || !upload.channelId) throw new Error("Channel or account could not be identified");
+                const encrypted = await encryptAegiresFile(new Uint8Array(await file.arrayBuffer()), passphrase, upload.channelId, senderId, settings.store.preset as AegiresPreset);
                 const name = encryptedFilename(upload.filename);
                 upload.item.file = new File([new Blob([encrypted])], name, {
                     type: "application/octet-stream",
@@ -328,6 +352,12 @@ export default definePlugin({
                 });
                 upload.filename = name;
                 upload.mimeType = "application/octet-stream";
+                // Prevent Discord from trying to decode/re-encode ciphertext as
+                // an image before upload (which would corrupt the AES-GCM bytes).
+                upload.isImage = false;
+                upload.isVideo = false;
+                upload.preCompressionSize = encrypted.byteLength;
+                upload.currentSize = encrypted.byteLength;
             }
             return true;
         } catch {
@@ -369,12 +399,12 @@ export default definePlugin({
     },
 
     async onBeforeMessageSend(_channelId, message) {
-        return encryptMessage(message);
+        return encryptMessage(_channelId, message);
     },
 
     async onBeforeMessageEdit(channelId, messageId, message) {
         const original = MessageStore.getMessage(channelId, messageId);
         const wasEncrypted = looksEncrypted(original?.content ?? "") || ciphertextByMessageId.has(messageId);
-        return encryptMessage(message, wasEncrypted);
+        return encryptMessage(channelId, message, wasEncrypted);
     }
 });
